@@ -1,4 +1,4 @@
-name: دانلود فایل و ساخت آرشیو چندتکه رمزدار
+name: دانلود فایل و ساخت آرشیو چندتکه رمزدار (push مرحله‌ای)
 
 on:
   workflow_dispatch:
@@ -33,7 +33,7 @@ jobs:
           curl -L --fail --retry 3 -o downloaded_file "${{ github.event.inputs.file_url }}"
           ls -lh downloaded_file
 
-      - name: استخراج نام اصلی فایل
+      - name: استخراج نام اصلی فایل (اختیاری)
         run: |
           ORIGINAL_NAME=$(basename "${{ github.event.inputs.file_url }}" | cut -d '?' -f1)
           [ -z "$ORIGINAL_NAME" ] && ORIGINAL_NAME="downloaded_file"
@@ -41,18 +41,48 @@ jobs:
 
       - name: ساخت آرشیو رمزدار چندتکه (هر تکه ۹۵ مگابایت)
         run: |
-          # -v95m : هر جلد ۹۵ مگابایت (ایمن برای گیت)
-          # -mhe=on : رمزگذاری اسم فایل‌های داخل
-          # -mx=3 : فشرده‌سازی متوسط و سریع
           7z a -p"${{ github.event.inputs.zip_password }}" -mhe=on -mx=3 -v95m "archive.7z" downloaded_file
 
-      - name: حذف فایل دانلود شده (برای اینکه داخل ریپازیتوری نره)
+      - name: حذف فایل اصلی
         run: rm -f downloaded_file
 
-      - name: Commit و Push فایل‌های چندتکه
+      - name: Commit و Push مرحله‌ای تکه‌ها (هر بار ۲۰ تکه)
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add archive.7z.*
-          git commit -m "Add password-protected multi-volume archive (each volume <100MB)"
-          git push
+          
+          # لیست تمام تکه‌ها
+          chunks=(archive.7z.*)
+          total=${#chunks[@]}
+          batch_size=10  # هر بار ۲۰ تکه
+          start=0
+          
+          while [ $start -lt $total ]; do
+            end=$((start + batch_size - 1))
+            [ $end -ge $total ] && end=$((total - 1))
+            
+            echo "Pushing chunks $start to $end ..."
+            
+            # افزودن تکه‌های این بسته
+            for i in $(seq $start $end); do
+              git add "${chunks[$i]}"
+            done
+            
+            # commit (با پیام حاوی محدوده)
+            git commit -m "Add chunks $((start+1))-$((end+1)) of $total"
+            
+            # push با حداکثر تلاش ۵ بار
+            for attempt in {1..5}; do
+              if git push; then
+                echo "Push successful"
+                break
+              else
+                echo "Push failed (attempt $attempt), retrying in 10 seconds..."
+                sleep 10
+              fi
+            done
+            
+            start=$((end + 1))
+            # کمی صبر بین بسته‌ها
+            sleep 5
+          done
